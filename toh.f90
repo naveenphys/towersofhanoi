@@ -3,12 +3,26 @@
 !     you can never stack a larger disk on a smaller one. You can only move a
 !     single disk at the time, and that should be at the top of a stack, and
 !     placed on top of another stack. Consider a recursive approach.
-!     Compile the program using:
-!     gfortran -cpp -DNMAX=xx question_04.f90
+!     Requires plplot.
+!
+!     Under redhat linux the location of the module files needed for plplot
+!     repoquery --list plplot-fortran-devel
+!     or
+!     rpm -ql  plplot-fortran-devel
+!
+!     Compile the program using (NMAX is the number of disks on first tower at start):
+!     gfortran -c -cpp -DNMAX=16 question_04.f90 -I/usr/lib64/gfortran/modules
+!     Linking:
+!     gfortran -o a.out question_04.o -L/usr/lib64 -lplplotfortran
+
 
 #ifndef NMAX
 #define NMAX 10
 #endif /*NMAX*/
+
+#ifndef SILENT
+#define SILENT 1
+#endif /*SILENT*/
 
 #define MOVE_SUCCESS 0
 #define MOVE_INVALID_P_EQ_Q 1
@@ -17,7 +31,7 @@
 #define MOVE_INVALID_A_GT_B 4
 
 
-      PROGRAM question_04
+      PROGRAM toh
       USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: I2 => INT16, I8 => INT64
       IMPLICIT NONE
       TYPE :: tower_t(n)
@@ -30,8 +44,8 @@
         INTEGER, LEN                        :: n
         INTEGER, LEN                        :: m
         TYPE(tower_t(n=NMAX)), DIMENSION(m) :: t ! m towers
-        INTEGER                             :: n_accept
-        INTEGER                             :: n_reject
+        INTEGER(KIND=I8)                    :: n_accept
+        INTEGER(KIND=I8)                    :: n_reject
       END TYPE towers_t
       INTEGER, PARAMETER                  :: L = 1
       INTEGER, PARAMETER                  :: C = 2
@@ -43,21 +57,25 @@
       INTEGER, PARAMETER                  :: C2R = 3
       INTEGER, PARAMETER                  :: R2C = -3
       TYPE(towers_t(n=NMAX,m=3))          :: towers
-      INTEGER                             :: ierr
       INTEGER                             :: unit_no
       INTEGER                             :: istat
+      INTEGER                             :: ierr
       CHARACTER(LEN=128)                  :: errmsg
 
-
+      ! Report user about the number of disks.
       WRITE(UNIT=*,FMT='(A,I3)') &
       'Initial number of disks: ', SIZE(towers%t(L)%disks)
 
+      ! Initialize the towers
       CALL init(towers)
+      ! Show the towers in ascii.
       CALL show(towers)
+
+      ! Open a file to store the moves.
 
       OPEN(NEWUNIT=unit_no, FILE='moves.dat', STATUS='REPLACE', &
       ACTION='WRITE', ACCESS = 'SEQUENTIAL', IOSTAT=istat, IOMSG=errmsg)
-      IF (istat .NE. 0) STOP 'Runtime error in OPEN statement'
+      IF (istat .NE. 0) STOP 'Runtime error in call to OPEN'
 
       ASSOCIATE(th => towers)
       DO
@@ -107,20 +125,27 @@
       END ASSOCIATE
 
       CLOSE(UNIT=unit_no, IOSTAT=istat, IOMSG=errmsg)
-      IF (istat .NE. 0) STOP 'Runtime error in CLOSE statement'
+      IF (istat .NE. 0) STOP 'Runtime error in call to CLOSE'
       WRITE(*,FMT='(A,I6)') 'n_accept:', towers%n_accept
       WRITE(*,FMT='(A,I6)') 'n_reject:', towers%n_reject
+
+      CALL plot_moves(towers%n_accept)
+      CALL analyse_correlation(towers%n_accept)
 
 
       CONTAINS
 
+!> @brief init: Initialize the tower derived data type.
+!!              All the disks are placed on leftmost tower.
+!!              Values of n_now and n_top for each tower is initialized.
+!! @param[in, out] towers: Variable of type towers_t
       SUBROUTINE init(towers)
       IMPLICIT NONE
-      INTEGER, PARAMETER         :: L = 1
-      INTEGER, PARAMETER         :: C = 2
-      INTEGER, PARAMETER         :: R = 3
-      TYPE(towers_t(n=NMAX,m=3)) :: towers
-      INTEGER                    :: i
+      INTEGER, PARAMETER                      :: L = 1
+      INTEGER, PARAMETER                      :: C = 2
+      INTEGER, PARAMETER                      :: R = 3
+      TYPE(towers_t(n=NMAX,m=3)), INTENT(OUT) :: towers
+      INTEGER                                 :: i
 
       ASSOCIATE(l => towers%t(L), c => towers%t(C), r => towers%t(R) )
       l%n_now = NMAX
@@ -137,7 +162,15 @@
 
       END SUBROUTINE
 
+!> @brief move: Moves a disk from tower P to tower Q.
+!!              Validity of move is verfified before execution.
+!!              Values of n_now and n_top for each tower is adjusted.
+!! @param[in]      P:      Integer index of tower from which disk is removed.
+!! @param[in]      Q:      Integer index of tower to which disk is added.
+!! @param[in, out] towers: Variable of type towers_t
+!! @param[out]     ierr:   Integer to pass the status of move( 0 => success).
       SUBROUTINE move(P, Q, towers, ierr)
+      USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: I2 => INT16, I8 => INT64
       IMPLICIT NONE
       INTEGER, PARAMETER                        :: L = 1
       INTEGER, PARAMETER                        :: C = 2
@@ -188,11 +221,17 @@
         B%disks(B%n_now+1:NMAX) = 0
         towers%n_accept = towers%n_accept + 1
       END ASSOCIATE
+#if SILENT == 0
       CALL show(towers)
+#endif /*SILENT*/
 
       END SUBROUTINE move
 
+!> @brief show: Shows the towers on terminal.
+!!
+!! @param[in] towers: Variable of type towers_t
       SUBROUTINE show(towers)
+      USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: I2 => INT16, I8 => INT64
       IMPLICIT NONE
       TYPE(towers_t(n=NMAX,m=3)), INTENT(IN) :: towers
       INTEGER                                :: i
@@ -219,4 +258,122 @@
 
       END SUBROUTINE show
 
-      END PROGRAM question_04
+!> @brief show: Make a plot of the moves.
+!!              Loads the data from the file moves.dat.
+!! @param[in] nmoves: The number of moves stored in moves.dat
+      SUBROUTINE plot_moves(nmoves)
+      USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: I2 => INT16, I8 => INT64
+      USE plplot
+      IMPLICIT NONE
+      INTEGER(KIND=I8), INTENT(IN)          :: nmoves
+      INTEGER(KIND=I2), DIMENSION(1:nmoves) :: move_id
+      INTEGER(KIND=I8), DIMENSION(1:nmoves) :: move_no
+      INTEGER                               :: unit_no
+      INTEGER(KIND=I8)                      :: counter
+      INTEGER                               :: istat
+      LOGICAL                               :: is_open
+      CHARACTER(LEN=128)                    :: errmsg
+
+      OPEN(NEWUNIT=unit_no, FILE='moves.dat', STATUS='OLD', &
+      ACTION='READ', ACCESS = 'SEQUENTIAL', IOSTAT=istat, IOMSG=errmsg)
+      IF (istat .NE. 0) STOP 'Runtime error in call to OPEN'//errmsg
+
+      WRITE(*,FMT='(A,I6,A)')'Read', nmoves, ' moves from file moves.dat'
+
+      counter = 1
+RL:   DO WHILE(counter .LE. nmoves)
+        READ(UNIT=unit_no, FMT=*, IOSTAT=istat, IOMSG=errmsg) move_id(counter)
+        IF (istat .NE. 0) THEN
+          WRITE(*,'(A,I6)') 'Counter : ', counter - 1
+          STOP 'Runtime error in READ statement'//errmsg
+        END IF
+        move_no(counter) = counter
+        counter = counter + 1
+      END DO RL
+
+      CLOSE(UNIT=unit_no, IOSTAT=istat, IOMSG=errmsg)
+      IF (istat .NE. 0) STOP 'Runtime error in CLOSE statement'
+
+      ! Set the device (keyword) name
+      CALL plsdev('xcairo')
+
+      ! Initialize plplot
+      CALL plinit
+
+      ! Set the color
+      CALL plcol0(15)
+
+      ! Create a labelled box to hold the plot.
+      CALL plenv (1.0, REAL(nmoves, KIND=4), -4.0, 4.0, 0, 0)
+
+      ! Draw a line
+      CALL plline (REAL(move_no, KIND=4), REAL(move_id, KIND=4))
+      ! Close Plplot library
+      CALL plend
+
+      END SUBROUTINE plot_moves
+
+
+      SUBROUTINE analyse_correlation(nmoves)
+      USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: I2 => INT16, I8 => INT64
+      USE plplot
+      IMPLICIT NONE
+      INTEGER(KIND=I8), INTENT(IN)            :: nmoves
+      INTEGER(KIND=I2), DIMENSION(1:nmoves)   :: move_id
+      INTEGER(KIND=I8), DIMENSION(1:nmoves)   :: n_shift
+      INTEGER(KIND=I8), DIMENSION(1:nmoves-1) :: acorr
+      INTEGER                                 :: unit_no
+      INTEGER(KIND=I8)                        :: counter
+      INTEGER                                 :: istat
+      LOGICAL                                 :: is_open
+      CHARACTER(LEN=128)                      :: errmsg
+
+
+
+      OPEN(NEWUNIT=unit_no, FILE='moves.dat', STATUS='OLD', &
+      ACTION='READ', ACCESS = 'SEQUENTIAL', IOSTAT=istat, IOMSG=errmsg)
+      IF (istat .NE. 0) STOP 'Runtime error in call to OPEN'//errmsg
+
+      WRITE(*,FMT='(A,I6,A)')'Read', nmoves, ' moves from file moves.dat'
+
+      counter = 1
+RL:   DO WHILE(counter .LE. nmoves)
+        READ(UNIT=unit_no, FMT=*, IOSTAT=istat, IOMSG=errmsg) move_id(counter)
+        IF (istat .NE. 0) THEN
+          WRITE(*,'(A,I6)') 'Counter : ', counter - 1
+          STOP 'Runtime error in READ statement'//errmsg
+        END IF
+        counter = counter + 1
+      END DO RL
+
+      CLOSE(UNIT=unit_no, IOSTAT=istat, IOMSG=errmsg)
+      IF (istat .NE. 0) STOP 'Runtime error in CLOSE statement'
+
+      DO counter = 1, nmoves-1
+        n_shift(counter) = counter
+        acorr(counter) = DOT_PRODUCT(move_id(1:nmoves-counter), &
+        move_id(1+counter:nmoves))
+      END DO
+
+      ! Set the device (keyword) name
+      CALL plsdev('xcairo')
+
+      ! Initialize plplot
+      CALL plinit
+
+      ! Set the color
+      CALL plcol0(15)
+
+      ! Create a labelled box to hold the plot.
+      CALL plenv (1.0, REAL(nmoves-1, KIND=4), &
+      REAL(MINVAL(acorr), KIND=4), &
+      REAL(MAXVAL(acorr), KIND=4), 0, 0)
+
+      ! Draw a line
+      CALL plline (REAL(n_shift, KIND=4), REAL(acorr, KIND=4))
+      ! Close Plplot library
+      CALL plend
+
+      END SUBROUTINE analyse_correlation
+
+      END PROGRAM toh
