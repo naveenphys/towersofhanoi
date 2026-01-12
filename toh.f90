@@ -258,8 +258,8 @@
 
       END SUBROUTINE show
 
-!> @brief show: Make a plot of the moves.
-!!              Loads the data from the file moves.dat.
+!> @brief plot_moves: Make a plot of the moves.
+!!                    Loads the data from the file moves.dat.
 !! @param[in] nmoves: The number of moves stored in moves.dat
       SUBROUTINE plot_moves(nmoves)
       USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: I2 => INT16, I8 => INT64
@@ -313,7 +313,9 @@ RL:   DO WHILE(counter .LE. nmoves)
 
       END SUBROUTINE plot_moves
 
-
+!> @brief analyse_correlation: Make a plot of the autocorrelation (not exactly).
+!!                             Loads the data from the file moves.dat.
+!! @param[in] nmoves: The number of moves stored in moves.dat
       SUBROUTINE analyse_correlation(nmoves)
       USE, INTRINSIC :: ISO_FORTRAN_ENV, ONLY: I2 => INT16, I8 => INT64
       USE plplot
